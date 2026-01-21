@@ -81,53 +81,82 @@ class TodoCoordinator(DataUpdateCoordinator):
         for todo_id, todo in list(self.todos.items()):
             if not todo.get("recurring", False):
                 continue
-                
-            # Skip if not completed
-            if not todo.get("completed", False):
-                continue
-            
-            # Check if we need to create the next occurrence
-            completed_date = todo.get("completed_date")
-            if not completed_date:
-                continue
-                
-            try:
-                completed_dt = datetime.fromisoformat(completed_date)
-            except (ValueError, TypeError):
-                continue
             
             recurring_rule = todo.get("recurring_rule", {})
+            if not recurring_rule:
+                continue
+            
             interval = recurring_rule.get("interval", 1)
             unit = recurring_rule.get("unit", "days")
             
-            # Calculate next due date
-            if unit == "days":
-                next_due = completed_dt + timedelta(days=interval)
-            elif unit == "weeks":
-                next_due = completed_dt + timedelta(weeks=interval)
-            elif unit == "months":
-                # Approximate month as 30 days
-                next_due = completed_dt + timedelta(days=interval * 30)
-            else:
-                continue
-            
-            # Check if next occurrence should be created
-            if now >= next_due:
-                # Create new todo based on this one
-                new_todo_id = str(uuid.uuid4())
-                new_todo = todo.copy()
-                new_todo["id"] = new_todo_id
-                new_todo["completed"] = False
-                new_todo["completed_date"] = None
-                new_todo["due_date"] = next_due.strftime("%Y-%m-%d")
+            # Check if todo is completed - if so, create next occurrence
+            if todo.get("completed", False):
+                completed_date = todo.get("completed_date")
+                if not completed_date:
+                    continue
+                    
+                try:
+                    completed_dt = datetime.fromisoformat(completed_date.replace("Z", "+00:00"))
+                    if completed_dt.tzinfo:
+                        completed_dt = completed_dt.replace(tzinfo=None)
+                except (ValueError, TypeError):
+                    continue
                 
-                # If items exist (shopping/packing lists), reset them
-                if "items" in new_todo:
-                    for item in new_todo["items"]:
-                        item["checked"] = False
+                # Calculate next due date
+                if unit == "days":
+                    next_due = completed_dt + timedelta(days=interval)
+                elif unit == "weeks":
+                    next_due = completed_dt + timedelta(weeks=interval)
+                elif unit == "months":
+                    # Calculate months properly
+                    year = completed_dt.year
+                    month = completed_dt.month + interval
+                    day = completed_dt.day
+                    # Handle month overflow
+                    while month > 12:
+                        month -= 12
+                        year += 1
+                    # Handle day overflow (e.g., Feb 30 -> Feb 28)
+                    while True:
+                        try:
+                            next_due = datetime(year, month, day)
+                            break
+                        except ValueError:
+                            day -= 1
+                else:
+                    continue
                 
-                self.todos[new_todo_id] = new_todo
-                created_new = True
+                # Check if next occurrence should be created (only if due date has passed)
+                if now >= next_due:
+                    # Check if this occurrence already exists
+                    # Look for todos with same title, recurring pattern, and due date
+                    existing = False
+                    for existing_todo in self.todos.values():
+                        if (existing_todo.get("title") == todo.get("title") and
+                            existing_todo.get("recurring", False) and
+                            existing_todo.get("recurring_rule") == recurring_rule and
+                            existing_todo.get("due_date") == next_due.strftime("%Y-%m-%d") and
+                            not existing_todo.get("completed", False)):
+                            existing = True
+                            break
+                    
+                    if not existing:
+                        # Create new todo based on this one
+                        new_todo_id = str(uuid.uuid4())
+                        new_todo = todo.copy()
+                        new_todo["id"] = new_todo_id
+                        new_todo["completed"] = False
+                        new_todo["completed_date"] = None
+                        new_todo["due_date"] = next_due.strftime("%Y-%m-%d")
+                        new_todo["result"] = None  # Reset result
+                        
+                        # If items exist (shopping/packing lists), reset them
+                        if "items" in new_todo:
+                            for item in new_todo["items"]:
+                                item["checked"] = False
+                        
+                        self.todos[new_todo_id] = new_todo
+                        created_new = True
         
         if created_new:
             await self.async_save_data()

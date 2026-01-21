@@ -43,19 +43,45 @@ class TodoManagerCard extends HTMLElement {
       const persons = activeSensor?.attributes?.persons || [];
 
       const showCompleted = this.config.show_completed;
-      const displayTodos = showCompleted ? todos : todos.filter(t => !t.completed);
+      let displayTodos = showCompleted ? todos : todos.filter(t => !t.completed);
+      
+      // Apply filter
+      if (this.currentFilter) {
+        if (this.currentFilter === 'overdue') {
+          displayTodos = displayTodos.filter(t => !t.completed && this.isOverdue(t));
+        } else if (this.currentFilter === 'urgent') {
+          displayTodos = displayTodos.filter(t => !t.completed && this.isUrgent(t) && !this.isOverdue(t));
+        } else if (this.currentFilter === 'today') {
+          const today = new Date().toISOString().split('T')[0];
+          displayTodos = displayTodos.filter(t => !t.completed && t.due_date === today);
+        }
+      }
+
+      const activeTodos = todos.filter(t => !t.completed);
+      const overdueTodos = activeTodos.filter(t => this.isOverdue(t));
+      const urgentTodos = activeTodos.filter(t => this.isUrgent(t) && !this.isOverdue(t));
+      const overdueSensor = this._hass.states['sensor.todo_manager_overdue'];
+      const overdueCount = overdueSensor?.state || overdueTodos.length;
 
       let html = this.getStyles() + `
         <div class="todo-manager">
           <div class="todo-header">
             <div class="stats">
-              <span>Total: ${todos.length}</span>
-              <span>Aktiv: ${todos.filter(t => !t.completed).length}</span>
+              <span class="stat-item">📋 Total: ${todos.length}</span>
+              <span class="stat-item stat-active">✅ Aktiv: ${activeTodos.length}</span>
+              <span class="stat-item stat-overdue">🔴 Überfällig: ${overdueCount}</span>
+              ${urgentTodos.length > 0 ? `<span class="stat-item stat-urgent">⚡ Dringend: ${urgentTodos.length}</span>` : ''}
             </div>
-            <button class="btn btn-primary" onclick="this.getRootNode().host.openModal()">
-              + Neues ToDo
-            </button>
+            <div class="header-actions">
+              <button class="btn btn-secondary" onclick="this.getRootNode().host.openPersonModal()" title="Personen verwalten">
+                👥 Personen
+              </button>
+              <button class="btn btn-primary" onclick="this.getRootNode().host.openModal()">
+                + Neues ToDo
+              </button>
+            </div>
           </div>
+          ${this.renderUrgencyFilters()}
           <div class="todo-list">
       `;
 
@@ -71,6 +97,7 @@ class TodoManagerCard extends HTMLElement {
           </div>
         </div>
         ${this.renderModal(persons)}
+        ${this.renderPersonModal(persons)}
       `;
 
       this.content.innerHTML = html;
@@ -100,6 +127,55 @@ class TodoManagerCard extends HTMLElement {
           gap: 16px;
           font-size: 14px;
           color: var(--secondary-text-color);
+          flex-wrap: wrap;
+        }
+        .stat-item {
+          padding: 4px 8px;
+          border-radius: 4px;
+          background: var(--card-background-color, #f5f5f5);
+        }
+        .stat-active {
+          background: #e3f2fd;
+          color: #1976d2;
+        }
+        .stat-overdue {
+          background: #ffebee;
+          color: #c62828;
+          font-weight: 500;
+        }
+        .stat-urgent {
+          background: #fff3e0;
+          color: #e65100;
+          font-weight: 500;
+        }
+        .header-actions {
+          display: flex;
+          gap: 8px;
+        }
+        .urgency-filters {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 16px;
+          padding-bottom: 12px;
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+        }
+        .filter-btn {
+          padding: 6px 12px;
+          border: 1px solid var(--divider-color, #e0e0e0);
+          background: var(--card-background-color, #fff);
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 13px;
+          transition: all 0.2s;
+        }
+        .filter-btn:hover {
+          background: var(--primary-color);
+          color: var(--primary-text-color);
+        }
+        .filter-btn.active {
+          background: var(--primary-color);
+          color: white;
+          border-color: var(--primary-color);
         }
         .btn {
           background: var(--primary-color);
@@ -310,28 +386,110 @@ class TodoManagerCard extends HTMLElement {
           justify-content: flex-end;
           margin-top: 24px;
         }
+        .person-list {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+        .person-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 12px;
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 8px;
+          background: var(--card-background-color, #fff);
+        }
+        .person-color-indicator {
+          min-width: 20px;
+          min-height: 20px;
+        }
+        .urgency-indicator {
+          display: inline-block;
+          padding: 2px 8px;
+          border-radius: 12px;
+          font-size: 11px;
+          font-weight: 500;
+          margin-left: 8px;
+        }
+        .urgency-indicator.overdue {
+          background: #f44336;
+          color: white;
+        }
+        .urgency-indicator.urgent {
+          background: #ff9800;
+          color: white;
+        }
+        .urgency-indicator.normal {
+          background: #e0e0e0;
+          color: #424242;
+        }
       </style>
     `;
   }
 
   getUrgencyClass(todo) {
     if (todo.completed) return 'completed';
+    if (this.isOverdue(todo)) return 'overdue';
+    if (this.isUrgent(todo)) return 'urgent';
+    return '';
+  }
+
+  isOverdue(todo) {
     const dueDate = todo.due_date;
     const dueTime = todo.due_time || '23:59';
-    if (!dueDate) return '';
+    if (!dueDate) return false;
 
     try {
       const dueStr = `${dueDate}T${dueTime}:00`;
       const dueDt = new Date(dueStr);
       const now = new Date();
-
-      if (dueDt < now) return 'overdue';
-      const hoursUntil = (dueDt - now) / (1000 * 60 * 60);
-      if (hoursUntil < 24) return 'urgent';
+      return dueDt < now;
     } catch (e) {
       console.error('Date parsing error:', e);
+      return false;
     }
-    return '';
+  }
+
+  isUrgent(todo) {
+    const dueDate = todo.due_date;
+    const dueTime = todo.due_time || '23:59';
+    if (!dueDate) return false;
+
+    try {
+      const dueStr = `${dueDate}T${dueTime}:00`;
+      const dueDt = new Date(dueStr);
+      const now = new Date();
+      const hoursUntil = (dueDt - now) / (1000 * 60 * 60);
+      return hoursUntil >= 0 && hoursUntil < 24;
+    } catch (e) {
+      console.error('Date parsing error:', e);
+      return false;
+    }
+  }
+
+  renderUrgencyFilters() {
+    if (!this.currentFilter) {
+      this.currentFilter = 'all';
+    }
+    return `
+      <div class="urgency-filters">
+        <button class="filter-btn ${this.currentFilter === 'all' ? 'active' : ''}" 
+          onclick="this.getRootNode().host.setFilter('all')">Alle</button>
+        <button class="filter-btn ${this.currentFilter === 'overdue' ? 'active' : ''}" 
+          onclick="this.getRootNode().host.setFilter('overdue')">🔴 Überfällig</button>
+        <button class="filter-btn ${this.currentFilter === 'urgent' ? 'active' : ''}" 
+          onclick="this.getRootNode().host.setFilter('urgent')">⚡ Dringend</button>
+        <button class="filter-btn ${this.currentFilter === 'today' ? 'active' : ''}" 
+          onclick="this.getRootNode().host.setFilter('today')">📅 Heute</button>
+      </div>
+    `;
+  }
+
+  setFilter(filter) {
+    this.currentFilter = filter;
+    this.updateCard();
   }
 
   renderTodoItem(todo, persons) {
@@ -349,8 +507,19 @@ class TodoManagerCard extends HTMLElement {
       .join('');
 
     const dueText = todo.due_date
-      ? `${todo.due_date} ${todo.due_time || '23:59'}`
+      ? `${this.formatDate(todo.due_date)} ${todo.due_time || '23:59'}`
       : 'Kein Fälligkeitsdatum';
+    
+    let urgencyBadge = '';
+    if (!todo.completed && todo.due_date) {
+      if (this.isOverdue(todo)) {
+        const hoursOverdue = Math.floor((new Date() - new Date(`${todo.due_date}T${todo.due_time || '23:59'}`)) / (1000 * 60 * 60));
+        urgencyBadge = `<span class="urgency-indicator overdue">🔴 ${hoursOverdue}h überfällig</span>`;
+      } else if (this.isUrgent(todo)) {
+        const hoursUntil = Math.floor((new Date(`${todo.due_date}T${todo.due_time || '23:59'}`) - new Date()) / (1000 * 60 * 60));
+        urgencyBadge = `<span class="urgency-indicator urgent">⚡ Noch ${hoursUntil}h</span>`;
+      }
+    }
 
     let itemsHtml = '';
     if (todo.items && Array.isArray(todo.items) && todo.items.length > 0) {
@@ -399,7 +568,7 @@ class TodoManagerCard extends HTMLElement {
           </button>
         </div>
         <div class="todo-meta">
-          <span>📅 ${this.escapeHtml(dueText)}</span>
+          <span>📅 ${this.escapeHtml(dueText)}${urgencyBadge}</span>
           <span>📋 ${this.escapeHtml(typeLabel)}</span>
           ${todo.recurring ? '<span>🔄 Wiederkehrend</span>' : ''}
         </div>
@@ -420,6 +589,26 @@ class TodoManagerCard extends HTMLElement {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  formatDate(dateStr) {
+    try {
+      const date = new Date(dateStr + 'T00:00:00');
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      if (date.getTime() === today.getTime()) {
+        return 'Heute';
+      } else if (date.getTime() === tomorrow.getTime()) {
+        return 'Morgen';
+      } else {
+        return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      }
+    } catch (e) {
+      return dateStr;
+    }
   }
 
   renderModal(persons) {
@@ -768,6 +957,176 @@ class TodoManagerCard extends HTMLElement {
 
   editTodo(todoId) {
     this.openModal(todoId);
+  }
+
+  renderPersonModal(persons) {
+    return `
+      <div id="personModal" class="modal">
+        <div class="modal-content">
+          <h2 style="margin-top: 0;">Personen verwalten</h2>
+          <div id="personList" class="person-list">
+            ${persons.map(p => `
+              <div class="person-item" data-person-id="${p.id}">
+                <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                  <div class="person-color-indicator" style="background-color: ${p.color || '#1976d2'}; width: 20px; height: 20px; border-radius: 50%;"></div>
+                  <span>${this.escapeHtml(p.name)}</span>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;"
+                    onclick="this.getRootNode().host.editPerson('${p.id}')">Bearbeiten</button>
+                  <button class="btn btn-danger" style="padding: 6px 12px; font-size: 13px;"
+                    onclick="this.getRootNode().host.deletePerson('${p.id}')">Löschen</button>
+                </div>
+              </div>
+            `).join('')}
+            ${persons.length === 0 ? '<p style="color: var(--secondary-text-color);">Keine Personen vorhanden</p>' : ''}
+          </div>
+          <div class="modal-actions" style="margin-top: 24px;">
+            <button type="button" class="btn btn-secondary" onclick="this.getRootNode().host.closePersonModal()">Schließen</button>
+            <button type="button" class="btn btn-primary" onclick="this.getRootNode().host.openPersonEditModal()">+ Person hinzufügen</button>
+          </div>
+        </div>
+      </div>
+      <div id="personEditModal" class="modal">
+        <div class="modal-content">
+          <h2 id="personModalTitle" style="margin-top: 0;">Neue Person</h2>
+          <form id="personForm">
+            <div class="form-group">
+              <label>Name *</label>
+              <input type="text" id="personName" required>
+            </div>
+            <div class="form-group">
+              <label>Farbe</label>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="color" id="personColor" value="#1976d2" style="width: 80px; height: 40px; border: none; border-radius: 4px; cursor: pointer;">
+                <input type="text" id="personColorText" value="#1976d2" style="flex: 1; padding: 10px; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 4px;">
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button type="button" class="btn btn-secondary" onclick="this.getRootNode().host.closePersonEditModal()">Abbrechen</button>
+              <button type="submit" class="btn btn-primary">Speichern</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  openPersonModal() {
+    const modal = this.content.querySelector('#personModal');
+    if (modal) {
+      modal.classList.add('show');
+    }
+  }
+
+  closePersonModal() {
+    const modal = this.content.querySelector('#personModal');
+    if (modal) {
+      modal.classList.remove('show');
+    }
+  }
+
+  openPersonEditModal(personId = null) {
+    this.editingPersonId = personId;
+    const modal = this.content.querySelector('#personEditModal');
+    const title = this.content.querySelector('#personModalTitle');
+    const form = this.content.querySelector('#personForm');
+
+    if (modal) {
+      modal.classList.add('show');
+    }
+    if (title) {
+      title.textContent = personId ? 'Person bearbeiten' : 'Neue Person';
+    }
+
+    if (personId) {
+      const activeSensor = this._hass?.states['sensor.todo_manager_active'];
+      const persons = activeSensor?.attributes?.persons || [];
+      const person = persons.find(p => p.id === personId);
+      
+      if (person) {
+        this.content.querySelector('#personName').value = person.name || '';
+        this.content.querySelector('#personColor').value = person.color || '#1976d2';
+        this.content.querySelector('#personColorText').value = person.color || '#1976d2';
+      } else {
+        form?.reset();
+      }
+    } else {
+      form?.reset();
+      this.content.querySelector('#personColor').value = '#1976d2';
+      this.content.querySelector('#personColorText').value = '#1976d2';
+    }
+
+    // Sync color inputs
+    const colorInput = this.content.querySelector('#personColor');
+    const colorTextInput = this.content.querySelector('#personColorText');
+    if (colorInput && colorTextInput) {
+      colorInput.addEventListener('input', (e) => {
+        colorTextInput.value = e.target.value;
+      });
+      colorTextInput.addEventListener('input', (e) => {
+        colorInput.value = e.target.value;
+      });
+    }
+
+    // Submit handler
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await this.savePerson();
+    });
+  }
+
+  closePersonEditModal() {
+    const modal = this.content.querySelector('#personEditModal');
+    if (modal) {
+      modal.classList.remove('show');
+    }
+    this.editingPersonId = null;
+  }
+
+  async savePerson() {
+    const name = this.content.querySelector('#personName').value;
+    const color = this.content.querySelector('#personColor').value;
+
+    if (!name) {
+      alert('Bitte geben Sie einen Namen ein');
+      return;
+    }
+
+    try {
+      const service = this.editingPersonId ? 'update_person' : 'create_person';
+      const serviceData = this.editingPersonId
+        ? { person_id: this.editingPersonId, person_name: name, person_color: color }
+        : { person_name: name, person_color: color };
+
+      await this._hass.callService('todo_manager', service, serviceData);
+      this.closePersonEditModal();
+      this.closePersonModal();
+      setTimeout(() => {
+        this.updateCard();
+      }, 500);
+    } catch (error) {
+      console.error('Error saving person:', error);
+      alert('Fehler beim Speichern: ' + (error.message || 'Unbekannter Fehler'));
+    }
+  }
+
+  async deletePerson(personId) {
+    if (confirm('Person wirklich löschen? Alle ToDo-Zuweisungen werden entfernt.')) {
+      try {
+        await this._hass.callService('todo_manager', 'delete_person', { person_id: personId });
+        setTimeout(() => {
+          this.updateCard();
+        }, 500);
+      } catch (error) {
+        console.error('Error deleting person:', error);
+        alert('Fehler beim Löschen');
+      }
+    }
+  }
+
+  editPerson(personId) {
+    this.openPersonEditModal(personId);
   }
 }
 

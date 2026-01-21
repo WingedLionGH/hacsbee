@@ -277,10 +277,15 @@ async def async_complete_todo_service(service: ServiceCall) -> None:
     
     if todo["completed"]:
         todo["completed_date"] = datetime.now().isoformat()
-        if ATTR_RESULT in service.data:
+        if ATTR_RESULT in service.data and service.data[ATTR_RESULT]:
             todo["result"] = service.data[ATTR_RESULT]
+        # For complex todos, keep existing result if not provided
+        if todo.get("todo_type") == TODO_TYPE_COMPLEX and ATTR_RESULT not in service.data:
+            # Don't clear result if already exists
+            pass
     else:
         todo["completed_date"] = None
+        # Optionally keep result when uncompleting
 
     await coordinator.async_save_data()
     _LOGGER.info("Completed todo: %s", todo_id)
