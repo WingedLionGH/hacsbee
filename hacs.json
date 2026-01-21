@@ -1,0 +1,7 @@
+{
+  "name": "ToDo Manager",
+  "render_readme": true,
+  "domains": ["todo_manager"],
+  "iot_class": "Local Polling",
+  "homeassistant": "2023.1.0"
+}

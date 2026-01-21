@@ -1,0 +1,12 @@
+{
+  "domain": "todo_manager",
+  "name": "ToDo Manager",
+  "version": "1.0.0",
+  "codeowners": ["@your-username"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/your-username/homeassistant-todo-manager",
+  "integration_type": "system",
+  "iot_class": "local_polling",
+  "requirements": []
+}
