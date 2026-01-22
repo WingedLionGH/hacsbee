@@ -8,5 +8,6 @@
   "documentation": "https://github.com/your-username/homeassistant-todo-manager",
   "integration_type": "system",
   "iot_class": "local_polling",
-  "requirements": []
+  "requirements": [],
+  "after_dependencies": []
 }

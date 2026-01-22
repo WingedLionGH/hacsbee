@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ToDo Manager",
+        "description": "Set up the ToDo Manager integration."
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect",
+      "unknown": "Unknown error occurred"
+    },
+    "abort": {
+      "single_instance_allowed": "Only a single configuration of ToDo Manager is allowed."
+    }
+  }
+}
